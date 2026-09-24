@@ -1,2 +1,4 @@
 DEPLOYMENT_GUIDE.md
 STREAMLIT_DEPLOYMENT_GUIDE.md
+__pycache__/
+*.pyc

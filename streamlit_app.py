@@ -142,18 +142,29 @@ with col_left:
     )
 
 if uploaded_file is not None:
-    # Save uploaded file to temp path
+    # Save uploaded file to temp path safely
     temp_dir = tempfile.gettempdir()
-    input_path = os.path.join(temp_dir, f"input_{uploaded_file.name}")
+    # Normalize filename: remove spaces or special characters for clean shell/pipe compatibility
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in uploaded_file.name)
+    input_path = os.path.join(temp_dir, f"input_{safe_name}")
+
     with open(input_path, "wb") as f:
-        f.write(uploaded_file.read())
+        f.write(uploaded_file.getbuffer())
 
     # Get video duration for preview scrubbing
-    cap = cv2.VideoCapture(input_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_sec = total_frames / max(1.0, fps)
-    cap.release()
+    duration_sec = 10.0
+    try:
+        from core.ffmpeg_utils import probe_video_metadata, get_ffmpeg_binaries
+        _, ffprobe_bin = get_ffmpeg_binaries()
+        meta = probe_video_metadata(input_path, ffprobe_bin)
+        duration_sec = float(meta.get("duration", 10.0))
+    except Exception:
+        cap = cv2.VideoCapture(input_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames > 0:
+            duration_sec = total_frames / max(1.0, fps)
+        cap.release()
 
     with col_right:
         st.subheader("🔍 Step 3: Interactive Live Preview")
@@ -161,8 +172,8 @@ if uploaded_file is not None:
             "Scrub Frame Timestamp (Seconds)",
             min_value=0.0,
             max_value=max(1.0, float(int(duration_sec))),
-            value=min(2.0, duration_sec),
-            step=0.5,
+            value=min(1.0, duration_sec),
+            step=0.2,
         )
 
     # Render Side-by-Side Single-Frame Preview
@@ -193,7 +204,7 @@ if uploaded_file is not None:
             progress_bar.progress(pct)
             status_text.text(desc)
 
-        output_path = os.path.join(temp_dir, f"graded_{uploaded_file.name}")
+        output_path = os.path.join(temp_dir, f"graded_{safe_name}")
 
         try:
             render_filtered_video(

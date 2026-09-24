@@ -29,20 +29,42 @@ def process_single_frame(
     if engine is None:
         engine = FilterEngine()
 
+    # 1. Attempt standard OpenCV VideoCapture
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
-
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    target_frame = min(total_frames - 1, max(0, int(timestamp_sec * fps)))
+    target_frame = min(max(0, total_frames - 1), max(0, int(timestamp_sec * fps)))
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-    ret, frame_bgr = cap.read()
-    cap.release()
+    frame_bgr = None
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        ret, read_frame = cap.read()
+        if ret and read_frame is not None and read_frame.size > 0:
+            frame_bgr = read_frame
+        cap.release()
 
-    if not ret or frame_bgr is None:
-        raise ValueError(f"Failed to read frame at {timestamp_sec}s from {video_path}")
+    # 2. Robust FFmpeg fallback (essential for Linux headless cloud where OpenCV has no native codecs)
+    if frame_bgr is None:
+        ffmpeg_bin, _ = get_ffmpeg_binaries()
+        cmd = [
+            ffmpeg_bin,
+            "-ss", str(max(0.0, float(timestamp_sec))),
+            "-i", video_path,
+            "-vframes", "1",
+            "-f", "image2pipe",
+            "-vcodec", "png",
+            "-",
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0 and len(res.stdout) > 0:
+            img_arr = np.frombuffer(res.stdout, dtype=np.uint8)
+            frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+
+    if frame_bgr is None or frame_bgr.size == 0:
+        raise ValueError(
+            f"Cannot extract frame from: {os.path.basename(video_path)} at {timestamp_sec}s. "
+            "The video format may be unreadable or corrupt."
+        )
 
     filtered_bgr = engine.apply_filter(frame_bgr, params)
 
